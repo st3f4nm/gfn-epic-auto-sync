@@ -1,4 +1,4 @@
-let gameTitles = ['Evil Dead: The Game']; // ← fill this with your list of game titles
+
 
 const DEFAULT_ACTION_DELAY_MS = 4000;
 const SEARCH_DELAY_MS = DEFAULT_ACTION_DELAY_MS;
