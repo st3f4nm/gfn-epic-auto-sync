@@ -16,9 +16,41 @@ const nameMismatches = [];
 const isVisible = (el) =>
   el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0);
 
-// Helper: click Epic Games Store platform option after Mark as Owned
+// Helper: wait
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Helper: click the exact platform-option Epic Games Store button
+const clickEpicPlatformOptionButton = async () => {
+  console.log("[GFN] ⏳ Looking for Epic Games Store platform-option button...");
+
+  for (let i = 0; i < 20; i++) {
+    if (stopFlag) return false;
+
+    const epicPlatformBtn =
+      document.querySelector('button.platform-option[aria-label="Epic Games Store"]') ||
+      [...document.querySelectorAll("button.platform-option")]
+        .find(btn =>
+          (btn.getAttribute("aria-label") || "").trim() === "Epic Games Store" ||
+          (btn.innerText || btn.textContent || "").trim().includes("Epic Games Store")
+        );
+
+    if (epicPlatformBtn && isVisible(epicPlatformBtn)) {
+      epicPlatformBtn.click();
+      console.log("[GFN] 🟣 Clicked Epic Games Store platform-option button");
+      await wait(STORE_SWITCH_SETTLE_DELAY_MS);
+      return true;
+    }
+
+    await wait(PANEL_POLL_INTERVAL_MS);
+  }
+
+  console.warn("[GFN] ⚠ Epic Games Store platform-option button not found.");
+  return false;
+};
+
+// Helper: fallback click Epic Games Store platform option after Mark as Owned
 const clickEpicGamesStoreOption = async () => {
-  console.log("[GFN] ⏳ Checking for Epic Games Store platform option...");
+  console.log("[GFN] ⏳ Checking for Epic Games Store platform option fallback...");
 
   for (let i = 0; i < 20; i++) {
     if (stopFlag) return false;
@@ -33,15 +65,15 @@ const clickEpicGamesStoreOption = async () => {
 
     if (epicStoreBtn && isVisible(epicStoreBtn)) {
       epicStoreBtn.click();
-      console.log("[GFN] 🟣 Clicked Epic Games Store option");
-      await new Promise(r => setTimeout(r, STORE_SWITCH_SETTLE_DELAY_MS));
+      console.log("[GFN] 🟣 Clicked Epic Games Store option fallback");
+      await wait(STORE_SWITCH_SETTLE_DELAY_MS);
       return true;
     }
 
-    await new Promise(r => setTimeout(r, PANEL_POLL_INTERVAL_MS));
+    await wait(PANEL_POLL_INTERVAL_MS);
   }
 
-  console.warn("[GFN] ⚠ Epic Games Store option not found. Continuing...");
+  console.warn("[GFN] ⚠ Epic Games Store option fallback not found. Continuing...");
   return false;
 };
 
@@ -53,7 +85,7 @@ document.addEventListener("keydown", e => {
   }
 });
 
-// ─── ➋ NETWORK HOOK (XHR + FETCH) ────────────────────────────────────────
+// ─── NETWORK HOOK: XHR + FETCH ────────────────────────────────────────────
 window.latestSearchResult = null;
 
 (function(open) {
@@ -102,13 +134,20 @@ window.fetch = async function(...args) {
   return response;
 };
 
-// ─── ➌ MAIN LOGIC ─────────────────────────────────────────────────────────
+// ─── MAIN LOGIC ───────────────────────────────────────────────────────────
 let gfn = {
   total: 0,
   searchInput: null,
+  queue: [],
 
   async run() {
-    this.total = gameTitles.length;
+    if (typeof gameTitles === "undefined" || !Array.isArray(gameTitles)) {
+      console.error("[GFN] ❌ gameTitles is missing. Add const gameTitles = [...] above this script.");
+      return;
+    }
+
+    this.queue = [...gameTitles];
+    this.total = this.queue.length;
 
     if (this.total === 0) {
       console.warn("[GFN] ⚠ gameTitles is empty.");
@@ -129,12 +168,12 @@ let gfn = {
   async searchNext() {
     if (stopFlag) return;
 
-    if (gameTitles.length === 0) {
+    if (this.queue.length === 0) {
       console.log("[GFN] ✅ All done.");
       return this.reportSummary();
     }
 
-    const title = gameTitles.shift();
+    const title = this.queue.shift();
     this.currentTitle = title;
 
     window.latestSearchResult = null;
@@ -155,7 +194,8 @@ let gfn = {
     if (stopFlag) return;
 
     const norm = s =>
-      s.toLowerCase()
+      String(s || "")
+        .toLowerCase()
         .replace(/[^\w\s]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -171,13 +211,14 @@ let gfn = {
     if (items.length > 0) {
       const match = items.find(i =>
         norm(i.title) === searchTitle &&
-        i.variants.some(v => v.appStore === "EPIC")
+        i.variants?.some(v => v.appStore === "EPIC")
       );
 
       if (match) {
-        const epicVariant = match.variants.find(v => v.appStore === "EPIC");
+        const epicVariant = match.variants?.find(v => v.appStore === "EPIC");
+        const libraryStatus = epicVariant?.gfn?.library?.status;
 
-        if (epicVariant.gfn.library.status !== "NOT_OWNED") {
+        if (libraryStatus && libraryStatus !== "NOT_OWNED") {
           console.log(`[GFN] ℹ️ "${match.title}" is already owned/synced`);
           syncedGames.push(match.title);
           return this.searchNext();
@@ -239,7 +280,7 @@ let gfn = {
       const possibleElements = Array.from(document.querySelectorAll("[class*='chip'], button, a"));
 
       epicChipEl = possibleElements.find(c =>
-        /epic/i.test(c.textContent) &&
+        /epic/i.test(c.textContent || "") &&
         isVisible(c) &&
         !c.classList.contains("more-actions-button")
       );
@@ -248,14 +289,14 @@ let gfn = {
         document.querySelector("gfn-game-details-actions button.more-actions-button") ||
         possibleElements.find(b =>
           ["⋮", "MORE", "ACTIONS"].some(k =>
-            (b.innerText || b.textContent).toUpperCase().includes(k)
+            (b.innerText || b.textContent || "").toUpperCase().includes(k)
           ) &&
           isVisible(b)
         );
 
       if (epicChipEl || moreBtn) break;
 
-      await new Promise(r => setTimeout(r, PANEL_POLL_INTERVAL_MS));
+      await wait(PANEL_POLL_INTERVAL_MS);
     }
 
     if (!epicChipEl && !moreBtn) {
@@ -269,24 +310,24 @@ let gfn = {
       console.log("[GFN] ▶️ Found Epic chip. Ensuring it is selected...");
 
       const actualChips = Array.from(epicChipEl.querySelectorAll("mat-chip"));
-      const exactTarget = actualChips.find(c => /epic/i.test(c.textContent)) || epicChipEl;
+      const exactTarget = actualChips.find(c => /epic/i.test(c.textContent || "")) || epicChipEl;
 
       exactTarget.click();
 
-      await new Promise(r => setTimeout(r, EPIC_CHIP_SWITCH_DELAY_MS));
+      await wait(EPIC_CHIP_SWITCH_DELAY_MS);
 
     } else if (moreBtn) {
       console.warn("[GFN] ⚠ Switching store via ⋮ menu...");
 
       moreBtn.click();
 
-      await new Promise(r => setTimeout(r, MENU_OPEN_DELAY_MS));
+      await wait(MENU_OPEN_DELAY_MS);
 
       let menus = Array.from(document.querySelectorAll("button, mat-mdc-menu-item, [role='menuitem'], span"));
 
       // Scenario A: "Epic" is immediately visible in the dropdown
       let epicOption = menus.find(b =>
-        /epic/i.test((b.innerText || b.textContent)) &&
+        /epic/i.test((b.innerText || b.textContent || "")) &&
         isVisible(b)
       );
 
@@ -296,12 +337,12 @@ let gfn = {
 
         console.log(`[GFN] ▶️ Switched "${title}" to Epic Store directly`);
 
-        await new Promise(r => setTimeout(r, STORE_SWITCH_SETTLE_DELAY_MS));
+        await wait(STORE_SWITCH_SETTLE_DELAY_MS);
 
       } else {
         // Scenario B: We have to click "Change game store" first
         const changeItem = menus.find(b =>
-          /(change|switch).*(store|platform)/i.test((b.innerText || b.textContent)) &&
+          /(change|switch).*(store|platform)/i.test((b.innerText || b.textContent || "")) &&
           isVisible(b)
         );
 
@@ -309,13 +350,13 @@ let gfn = {
           const clickableChange = changeItem.closest("button, [role='menuitem']") || changeItem;
           clickableChange.click();
 
-          await new Promise(r => setTimeout(r, MENU_OPEN_DELAY_MS));
+          await wait(MENU_OPEN_DELAY_MS);
 
           // Re-query the DOM for the new submenu
           menus = Array.from(document.querySelectorAll("button, mat-mdc-menu-item, [role='menuitem'], span"));
 
           epicOption = menus.find(b =>
-            /epic/i.test((b.innerText || b.textContent)) &&
+            /epic/i.test((b.innerText || b.textContent || "")) &&
             isVisible(b)
           );
 
@@ -325,7 +366,7 @@ let gfn = {
 
             console.log(`[GFN] ▶️ Switched "${title}" to Epic Store via submenu`);
 
-            await new Promise(r => setTimeout(r, STORE_SWITCH_SETTLE_DELAY_MS));
+            await wait(STORE_SWITCH_SETTLE_DELAY_MS);
 
           } else {
             console.error("[GFN] ❌ Epic entry missing in sub-menu list");
@@ -354,7 +395,7 @@ let gfn = {
       addBtn = elements.find(b => {
         if (!isVisible(b)) return false;
 
-        const text = (b.innerText || b.textContent)
+        const text = (b.innerText || b.textContent || "")
           .toUpperCase()
           .replace(/\s+/g, " ")
           .trim();
@@ -365,12 +406,12 @@ let gfn = {
 
       if (addBtn) break;
 
-      await new Promise(r => setTimeout(r, PANEL_POLL_INTERVAL_MS));
+      await wait(PANEL_POLL_INTERVAL_MS);
     }
 
     if (!addBtn) {
-      console.log(`[GFN] ℹ️ Button missing or already owned for "${title}".`);
-      syncedGames.push(title);
+      console.warn(`[GFN] ⚠ Add/Mark Owned button missing for "${title}". Skipping instead of assuming synced.`);
+      skippedGames.push(title);
       return this.searchNext();
     }
 
@@ -387,7 +428,11 @@ let gfn = {
     addBtn.click();
     console.log(`[GFN] 🟢 Clicked Add/Mark Owned for "${title}"`);
 
-    // NEW: Click the Epic Games Store option after marking as owned
+    // NEW FLOW:
+    // First click the exact platform-option button:
+    await clickEpicPlatformOptionButton();
+
+    // Then run the existing fallback/check:
     await clickEpicGamesStoreOption();
 
     console.log("[GFN] ⏳ Waiting for confirmation dialog...");
@@ -403,7 +448,7 @@ let gfn = {
       confirmBtn = elements.find(b => {
         if (!isVisible(b)) return false;
 
-        const text = (b.innerText || b.textContent)
+        const text = (b.innerText || b.textContent || "")
           .toUpperCase()
           .replace(/\s+/g, " ")
           .trim();
@@ -413,7 +458,7 @@ let gfn = {
 
       if (confirmBtn) break;
 
-      await new Promise(r => setTimeout(r, PANEL_POLL_INTERVAL_MS));
+      await wait(PANEL_POLL_INTERVAL_MS);
     }
 
     if (confirmBtn) {
